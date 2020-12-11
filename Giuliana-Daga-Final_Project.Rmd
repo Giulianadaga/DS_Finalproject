@@ -1,0 +1,1111 @@
+---
+title: "**Predicting farmers yields in rural Kenya**"
+author: "Giuliana Daga"
+date: "12/11/2020"
+header-includes: 
+ - \usepackage{setspace}
+ - \doublespacing
+toc: true
+
+fontsize: 12pt
+indent: true
+output: pdf_document
+extra_dependencies: "float"
+fig_caption: true
+
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warnings=FALSE, messages=FALSE, results="hide")
+
+```
+
+```{r include=FALSE}
+require(readr)
+require(tidyverse)
+require(haven)
+require(tidyverse)
+require(lubridate)
+require(caret) # for machine learning
+require(recipes) # For preprocessing your data
+require(rsample) # for train test splits
+require(rattle) # For nice tree plots
+require(yardstick) # for performance metrics
+require(janitor) # for performance metrics
+require(kernlab) # for radial boundary
+require(vip) # For variable importance
+require(pdp) # pdp and ice plots
+require(rpart) # Let's use the model package directly (rather than in caret)
+require(ggthemes)
+require(sf)
+require(nngeo)
+require(patchwork)
+require(RColorBrewer)
+
+```
+
+## Introduction 
+
+This report analyzes spatial aggregation and potential sources of improvement of Bima Pima, an index-based microinsurance product offered in Siaya County, Kenya. The product is piloted in Kenya by Agriculture and Climate Risk Enterprise Ltd. (ACRE), operating in Kenya since 2009 and now works in over ten countries across Africa and South Asia. An index-based product differs from more conventional insurance in that it links payouts, not to actual crop losses but exogenous events. In this case, ACRE takes measured rainfall, which likely correlates with crop losses. This way of assessing risk offers many advantages. It eliminates the need for expensive crop evaluations, allows for rapid payouts, and eliminates moral hazard, given that farmers have an incentive to make their farms succeed.  Despite such promising advantages, basis risk, defined as the correlation between insurable events and yields, remains an issue. This study aims to improve this imperfect correlation, especially at the low end of the yield distribution. 
+
+The purpose of this report is twofold. On the one hand, we will transform statistical analysis into a geospatial one with useful visualizations that improve our understanding of the targetted farmers and their characteristics.  For this purpose, we will use survey data to map farmers at the center of their farms. We will then overlay this data with the Kenya counties' shapefile and a fishnet based on ACRE's payout aggregation and calculations to observe their characteristics. On the other hand, we will use machine learning methods to explore whether different weather data help us predict farmers' self-reported profits in the Short Rains season 2018-2019. Given the extreme difficulty in this challenge, we will succeed if we learn whether adding different weather variables improves our understanding of farmers' performance to protect smallholder farmers facing considerable risks. 
+
+This report will proceed as follows. We will first state smallholder farmers' vulnerability to weather hazards and discuss weather index insurance (WII) as a development solution. In the following section, we will describe our weather data sources, their availability, and levels of granularity, as well as a brief discussion about the process to merge them and the unit of analysis. The analysis section describes our data and the methodologies we chose for our data. The results section comments on the metrics obtained through the supervised machine learning regression models.  To conclude, I will discuss the successes and pitfalls of my project and identify opportunities to move forward in the future. 
+
+## Problem Statement and Background 
+
+Smallholder farmers are increasingly affected by weather forces beyond their control, which affects their yields, profits, and livelihoods significantly.  Higher crop yield variability may increase poverty and food insecurity, especially in developing countries (Wheeler, 2013; Bown, 2015).  However, less than 20 percent globally have insurance coverage to protect themselves against shocks (GSMA, 2020). After catastrophic weather events, smallholder households may end up selling assets to smooth consumption (Carter, 2006). 
+
+On the demand side, low awareness and willingness to pay, together with liquidity constraints, lousy perception of the product (a lack of trust in the business), and behavioral biases such as present preferences (farmers prefer payouts closet to the current time). On the supply side,  insurance providers have historically overlooked the market, given that the higher cost of serving rural customers makes it a less profitable segment of the industry. 
+
+Weather index insurance (WII) could potentially overcome some of the problems with traditional insurance schemes. Through this method, insurance providers calculate payouts subject to objectively measured weather data, which presumably correlates with production losses. Compared with conventional insurance products,  WII imply fewer administration costs, making them more affordable and giving faster payments to farmers (Sibiko, Veettil, & Qaim, 2018). 
+
+However, despite all these advantages, smallholder farmers haven't voluntary uptake the product as anticipated. Some authors think that adding to the previously mentioned challenges for farmers (liquidity constraints, preference biases, etc.), the basis risk that often remains is a significant issue (Norton, Turvey, Osgood, 2012). Flawed basis risk means that the index insurance's construction may not match the insured's risk exposure. Index insurance services have been in the industry for over the last ten years, using mobile technology to digitize farmer's registration, premiums, payout claims, and satellite technologies to assess service delivery.  This report will explore the basis risk's local dimension, looking for satellite weather data that best describes the index/ yield relationship for the Short rains season 2018 in Siaya County, Kenya. 
+
+
+## Data and wrangling methodology
+
+The data in this project is composed using three primary data sources: 
+
+* **Georgetown Initiative on Innovation, Development, and Evaluation (Gui2de)** - Household survey data provides a measure of, among other things, maize's harvest and farmer profits on Baseline (before first planting season, Jul-Aug 2018), Midline (at the end of the first planting season, Feb-Mar 2019), and Endline (at the end of the second planting season, Nov-Dec 2019). For this analysis, we will focus on the first season; therefore, we will use Midline. 
+
+* **IRI/LDEO Climate Data Library** is a library of datasets. We will use the NOAA NCEP CPC CAMS, with daily precipitation data measured in milliliters for each pixel. There is availability from 1983 up to date. However, we will only use it from September 2018 to January 2019. 
+
+* **NASA Giovanni (Geospatial Interactive Online Visualization ANd aNalysis Infrastructure) data collection**: obtained daily data such as atmospheric pressure, atmospheric temperature, surface thermal properties, soil temperature, wind speed, radiation, etc. 
+
+The unit of analysis for this project differs between the dependent variable and our predictors. We have data for the short-rains season 2018-2019 at the individual level for the dependent variable.  For the predictors, we got daily data disaggregated at the pixel level, as defined by ACRE by the first decimal in latitude and longitude (i.e., 34.3-0.2; 34.3-0.3). However, to make more precise predictions, I aggregated daily weather data into four defined periods in the planting season: germination, vegetation, flowering, and pre-harvest. I included their mean, sd, and max for each period. 
+
+Our sources of data have some pitfalls:
+1. Nearly 40% (800) of our farmers don't farm maize in the short-rain season and prefer to wait for the long rains season.
+2. There is a potential self-reporting bias that we will discuss later in this paper.
+3. Obtaining weather data for our particular pixels was very challenging, and we hope to improve this process in the future and cross-validating our metrics across sources. 
+
+One of the challenging parts of this project was to join all datasets as we want them. Survey data's unit of analysis was at the household level, and it included latitude and longitude for each of the smallholder farmers. We downloaded a shapefile containing county divisions in Kenya. We built a grid (or fishnet) around each of the dots provided by ACRE to localize our farmers in a broader context.  We used the "sf" package extensively to join, filter, and overlay different shapes together.  For the rest of the analysis, we had to ensure that all spatial features overlay one with the other. More specifically, making sure our farmer grid, survey, and weather data aggregate farmers at the pixel level correctly. 
+
+
+```{r import data and graph farmers, echo=FALSE}
+survey <- read_dta("Data/midline_subset.dta") %>%
+      # Clean variable names
+    janitor::clean_names()  %>%
+    # drop obs with missing locations
+   drop_na(gps1longitude)  %>%
+  drop_na(gps1latitude)  
+
+#  select(maize_dry_kg_perha_win, total_profit_win,  ltotal_revenue, ltotal_cost_allseeds_win, ltotal_cost_inputs_win, gps1longitude, gps1latitude, pixel_code)
+  
+  # Let's look at the locations
+map_farmers <- survey %>% 
+    ggplot(aes(x=gps1longitude ,y=gps1latitude)) +
+    geom_point(color="darkred",alpha=.1)  
+# +  labs(title='Farms')
+  
+# Set lat and long as geospatial data
+  survey <- survey %>%
+  st_as_sf(coords=c("gps1longitude","gps1latitude"))
+
+
+```
+
+```{r map of kenya and grids, echo=FALSE}
+# Map of Kenia
+kenya_shape <- read_sf("Data/county_shape/County.shp")
+
+# Farmers grid and centroids data
+farmer_grid <- read_sf("Data/farmers_grid/farmers_grid.shp") %>%
+  mutate(Id = row_number())
+
+farmer_centroid <- read_sf("Data/farmers_grid/farmers_grid_label.shp") %>%
+mutate(Id = row_number())
+
+
+# Overlay the two spatial features
+st_crs(kenya_shape) <- st_crs(farmer_grid)
+
+# Keep only the counties where the farmers are
+ken_grid<- st_filter(kenya_shape, farmer_grid)
+
+# Plot map of Kenya with grids
+map_kenya_grids <- ggplot() +
+  geom_sf(data = kenya_shape, fill = "gray") +
+  geom_sf(data = ken_grid, fill = "darkgreen", alpha=.5, inherit.aes = F) +
+# +   labs(title='Kenya counties filtered by grid') +
+  theme_map()
+
+
+```
+
+```{r map with grid and centroids, include=FALSE}
+# Generate the plot of the grid data and their centroids
+map_grid_centroids <- ggplot() +
+  geom_sf(data = farmer_grid, fill = "azure3") +
+  geom_sf(data = farmer_centroid, alpha=.5, inherit.aes = F) +
+    coord_sf(xlim = c(34, 34.5), ylim = c(0.00, 0.4), expand = FALSE) 
+#+   labs(title='ACRE grid')
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE, fig.cap = "Farmers' location in broader Kenya", fig.subcap=c("Farmers location", "Map of Kenya", "Farmers' grid", "Farmers, gris, and Kenya counties"), fig.align = "center"}
+
+# Map everything together Visual check that we did what we intended with an overlayed plot
+all_graph <- ggplot() +
+  geom_sf(data = ken_grid,fill="lightgrey") +
+  geom_sf(data = farmer_grid,alpha=.5,inherit.aes = F) +
+  geom_sf(data = survey, alpha=.01,inherit.aes = F, color="darkred")  + 
+  # labs(title='Farmers, grid, and counties') +
+  theme_map()
+
+# grid.arrange(map_farmers, map_kenya_grids, map_grid_centroids, all_graph, nrow = 2)
+
+map_farmers + map_kenya_grids + map_grid_centroids + all_graph
+    
+```
+
+
+Once I got the .csv files, I had to do a lot of data wrangling and manipulation. First of all, I had to read each dataset with daily rainfall data for a given pixel inside a loop. Then, I converted the "time" variable into a date variable and restricted the sample to the season under consideration (September 2018 to January 2019). I also created a variable indicating each of the four periods: germination, vegetation, flowering, and pre-harvest.  It is important to note that these periods usually start from different windows planting windows among farmers. In this case, we imputed the same planting date for all farmers in the sample to assign our periods. After creating the periods, we collapsed at the period level, getting the mean, sd, and maximum values of each weather variable. We then transposed the data as a matrix, renamed columns and rows, and pivot wider so that each row is a pixel code and each column a different variable and metric. Finally, I fully joined our survey data with our weather data by the "pixel_code." I also had to make sure that I was doing the spatial join correctly with the "st_join" function. 
+
+The full dataset was analyzed for missingness and the potential for imputation.  We found that we had daily data for all pixels included in our analysis. However, out of the initial 2,210 farmers, only 1,313 remained. 
+
+
+
+## Analysis
+
+We start the analysis by excluding those observations with missing values in the variable "Kg. of maize per hectare". This procedure leaves us with 1,282 final farmers with self-reported maize productivity. 
+
+
+```{r profits, echo=FALSE, paged.print=FALSE, fig.cap= "Investments and productivity at each pixel", echo=FALSE}
+
+# Overlay the two spatial feature
+st_crs(survey) <- st_crs(farmer_grid)
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey)
+
+# Kg. Maize per acre
+choro_productivity <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=harvest_maize_dry_kg_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Kg. Maize per acre") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Total profits
+choro_total_profits <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=total_profit_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total profits") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Total profits
+choro_total_revenues <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=ltotal_revenue)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total revenue") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Investment in inputs
+choro_invest_inputs <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=ltotal_cost_inputs_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total investment in inputs") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Investment in seeds
+choro_invest_seeds <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=ltotal_cost_allseeds_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total investment in seeds") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+choro_total_profits + choro_invest_inputs + choro_invest_seeds + choro_productivity
+
+```
+
+
+We can see a wide variation in the levels of productivity, investment, overall profits, and payouts. We also graph some of our predictors' mean to see how they look and spot any variation. The same happens with our rainfall and other weather data, like humidity: 
+
+
+```{r rainfall data import, echo=FALSE, message=FALSE, warning=FALSE}
+
+# Create data frame with rainfall data
+rainfall <- read_csv("Data/rainfall_1.csv") 
+for (i in 2:9){  
+  tmp_data <- read_csv(paste0("Data/rainfall_",i,".csv")) 
+  rainfall<- left_join(rainfall, tmp_data, by="Time")
+}
+
+# Convert Time into a date variable
+rainfall <- rainfall %>% 
+  mutate(Time = dmy(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F")))))
+  
+#skimr::skim(rainfall)
+  
+rainfall_periods <- rainfall %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+rainfall_transpose <- as.data.frame(t(as.matrix(rainfall_periods))) %>%
+  mutate(Rain_Flowering = V2, Rain_Germination = V3, Rain_PreHarvest = V4, Rain_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+    mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3556", ifelse(id == 4 | id == 13 | id == 22, "KE3630", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3631", ifelse(id == 7 | id == 16 | id == 25, "KE3632", ifelse(id == 8| id == 17 | id == 26, "KE3558", ifelse(id==9| id == 18 | id == 27, "KE3633", ifelse(id == 10 | id == 19 | id == 28, "KE3486", "F")))))))))) %>%
+  filter(id != 1) %>%
+    filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+
+  mutate(Rain_Germination = as.numeric(Rain_Germination)) %>%
+  mutate(Rain_Flowering = as.numeric(Rain_Flowering)) %>%
+  mutate(Rain_PreHarvest = as.numeric(Rain_PreHarvest)) %>%
+  mutate (Rain_Vegetation = as.numeric(Rain_Vegetation)) %>%
+  
+pivot_wider(names_from = stat,
+                    values_from = c(Rain_Germination, Rain_Flowering, Rain_PreHarvest, Rain_Vegetation))
+
+
+```
+
+```{r rainfall data graph, echo=FALSE, paged.print=FALSE, fig.cap="Rainfall data at each pixel", message=FALSE, warning=FALSE}
+survey2 <- full_join(survey, rainfall_transpose, by="pixel_code")
+
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+# Germination
+choro_rain_germ <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=Rain_Germination_mean)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Germination") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Flowering
+choro_rain_flow <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=Rain_Flowering_mean)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Flowering") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Vegetation
+choro_rain_veg <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=Rain_Vegetation_mean)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Vegetation") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Pre-Harvest
+choro_rain_harv <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=Rain_PreHarvest_mean)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Pre-Harvest") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+choro_rain_germ + choro_rain_flow + choro_rain_veg + choro_rain_harv 
+
+```
+
+```{r Humidity, message=FALSE, warning=FALSE, include=FALSE}
+
+# Create data frame with other weather data
+humidity <- read_dta("Data/Giovanni/humidity.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+   summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+humidity_transpose <- as.data.frame(t(as.matrix(humidity))) %>%
+  mutate(humidity_Flowering = V2, humidity_Germination = V3, humidity_PreHarvest = V4, humidity_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(humidity_Germination = as.numeric(humidity_Germination)) %>%
+  mutate(humidity_Flowering = as.numeric(humidity_Flowering)) %>%
+  mutate(humidity_PreHarvest = as.numeric(humidity_PreHarvest)) %>%
+  mutate (humidity_Vegetation = as.numeric(humidity_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(humidity_Germination, humidity_Flowering, humidity_PreHarvest, humidity_Vegetation))
+
+survey2 <- full_join(survey2, humidity_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+
+
+```
+
+```{r Evapotranspiration, include=FALSE}
+
+# Create data frame with other weather data
+evapotranspiration <- read_dta("Data/Giovanni/evapotranspiration.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+ summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+evapotranspiration_transpose <- as.data.frame(t(as.matrix(evapotranspiration))) %>%
+  mutate(evapotranspiration_Flowering = V2, evapotranspiration_Germination = V3, evapotranspiration_PreHarvest = V4, evapotranspiration_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(evapotranspiration_Germination = as.numeric(evapotranspiration_Germination)) %>%
+  mutate(evapotranspiration_Flowering = as.numeric(evapotranspiration_Flowering)) %>%
+  mutate(evapotranspiration_PreHarvest = as.numeric(evapotranspiration_PreHarvest)) %>%
+  mutate (evapotranspiration_Vegetation = as.numeric(evapotranspiration_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(evapotranspiration_Germination, evapotranspiration_Flowering, evapotranspiration_PreHarvest, evapotranspiration_Vegetation))
+  
+  
+survey2 <- full_join(survey2, evapotranspiration_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+```
+
+```{r Soil heat, include=FALSE}
+
+# Create data frame with other weather data
+soil_heat <- read_dta("Data/Giovanni/soil_heat.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+   summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+soil_heat_transpose <- as.data.frame(t(as.matrix(soil_heat))) %>%
+  mutate(soil_heat_Flowering = V2, soil_heat_Germination = V3, soil_heat_PreHarvest = V4, soil_heat_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(soil_heat_Germination = as.numeric(soil_heat_Germination)) %>%
+  mutate(soil_heat_Flowering = as.numeric(soil_heat_Flowering)) %>%
+  mutate(soil_heat_PreHarvest = as.numeric(soil_heat_PreHarvest)) %>%
+  mutate (soil_heat_Vegetation = as.numeric(soil_heat_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(soil_heat_Germination, soil_heat_Flowering, soil_heat_PreHarvest, soil_heat_Vegetation))
+  
+  
+survey2 <- full_join(survey2, soil_heat_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+```
+
+```{r Soil moisture, include=FALSE} 
+
+# Create data frame with other weather data
+soilmoisture_pc <- read_dta("Data/Giovanni/soilmoisture_pc.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+   summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+soilmoisture_pc_transpose <- as.data.frame(t(as.matrix(soilmoisture_pc))) %>%
+  mutate(soilmoisture_pc_Flowering = V2, soilmoisture_pc_Germination = V3, soilmoisture_pc_PreHarvest = V4, soilmoisture_pc_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(soilmoisture_pc_Germination = as.numeric(soilmoisture_pc_Germination)) %>%
+  mutate(soilmoisture_pc_Flowering = as.numeric(soilmoisture_pc_Flowering)) %>%
+  mutate(soilmoisture_pc_PreHarvest = as.numeric(soilmoisture_pc_PreHarvest)) %>%
+  mutate (soilmoisture_pc_Vegetation = as.numeric(soilmoisture_pc_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(soilmoisture_pc_Germination, soilmoisture_pc_Flowering, soilmoisture_pc_PreHarvest, soilmoisture_pc_Vegetation))
+  
+survey2 <- full_join(survey2, soilmoisture_pc_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Surface air temperature, include=FALSE}
+
+# Create data frame with other weather data
+surface_air_temperature <- read_dta("Data/Giovanni/surface_air_temperature.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+surface_air_temperature_transpose <- as.data.frame(t(as.matrix(surface_air_temperature))) %>%
+  mutate(surface_air_temperature_Flowering = V2, surface_air_temperature_Germination = V3, surface_air_temperature_PreHarvest = V4, surface_air_temperature_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(surface_air_temperature_Germination = as.numeric(surface_air_temperature_Germination)) %>%
+  mutate(surface_air_temperature_Flowering = as.numeric(surface_air_temperature_Flowering)) %>%
+  mutate(surface_air_temperature_PreHarvest = as.numeric(surface_air_temperature_PreHarvest)) %>%
+  mutate (surface_air_temperature_Vegetation = as.numeric(surface_air_temperature_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(surface_air_temperature_Germination, surface_air_temperature_Flowering, surface_air_temperature_PreHarvest, surface_air_temperature_Vegetation))
+  
+survey2 <- full_join(survey2, surface_air_temperature_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Surface pressure, include=FALSE}
+
+# Create data frame with other weather data
+surface_pressure <- read_dta("Data/Giovanni/surface_pressure.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+surface_pressure_transpose <- as.data.frame(t(as.matrix(surface_pressure))) %>%
+  mutate(surface_pressure_Flowering = V2, surface_pressure_Germination = V3, surface_pressure_PreHarvest = V4, surface_pressure_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(surface_pressure_Germination = as.numeric(surface_pressure_Germination)) %>%
+  mutate(surface_pressure_Flowering = as.numeric(surface_pressure_Flowering)) %>%
+  mutate(surface_pressure_PreHarvest = as.numeric(surface_pressure_PreHarvest)) %>%
+  mutate (surface_pressure_Vegetation = as.numeric(surface_pressure_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(surface_pressure_Germination, surface_pressure_Flowering, surface_pressure_PreHarvest, surface_pressure_Vegetation))
+  
+  
+survey2 <- full_join(survey2, surface_pressure_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Surface wind speed, include=FALSE}
+
+# Create data frame with other weather data
+surface_wind_speed <- read_dta("Data/Giovanni/surface_wind_speed.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+surface_wind_speed_transpose <- as.data.frame(t(as.matrix(surface_wind_speed))) %>%
+  mutate(surface_wind_speed_Flowering = V2, surface_wind_speed_Germination = V3, surface_wind_speed_PreHarvest = V4, surface_wind_speed_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(surface_wind_speed_Germination = as.numeric(surface_wind_speed_Germination)) %>%
+  mutate(surface_wind_speed_Flowering = as.numeric(surface_wind_speed_Flowering)) %>%
+  mutate(surface_wind_speed_PreHarvest = as.numeric(surface_wind_speed_PreHarvest)) %>%
+  mutate (surface_wind_speed_Vegetation = as.numeric(surface_wind_speed_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(surface_wind_speed_Germination, surface_wind_speed_Flowering, surface_wind_speed_PreHarvest, surface_wind_speed_Vegetation))
+  
+  
+survey2 <- full_join(survey2, surface_wind_speed_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Sensible heat, include=FALSE}
+
+# Create data frame with other weather data
+sensible_heat <- read_dta("Data/Giovanni/sensible_heat.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+sensible_heat_transpose <- as.data.frame(t(as.matrix(sensible_heat))) %>%
+  mutate(sensible_heat_Flowering = V2, sensible_heat_Germination = V3, sensible_heat_PreHarvest = V4, sensible_heat_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(sensible_heat_Germination = as.numeric(sensible_heat_Germination)) %>%
+  mutate(sensible_heat_Flowering = as.numeric(sensible_heat_Flowering)) %>%
+  mutate(sensible_heat_PreHarvest = as.numeric(sensible_heat_PreHarvest)) %>%
+  mutate (sensible_heat_Vegetation = as.numeric(sensible_heat_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(sensible_heat_Germination, sensible_heat_Flowering, sensible_heat_PreHarvest, sensible_heat_Vegetation))
+  
+  
+survey2 <- full_join(survey2, sensible_heat_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Latent heat, include=FALSE}
+
+# Create data frame with other weather data
+latent_heat <- read_dta("Data/Giovanni/latent_heat.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+ summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+latent_heat_transpose <- as.data.frame(t(as.matrix(latent_heat))) %>%
+  mutate(latent_heat_Flowering = V2, latent_heat_Germination = V3, latent_heat_PreHarvest = V4, latent_heat_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(latent_heat_Germination = as.numeric(latent_heat_Germination)) %>%
+  mutate(latent_heat_Flowering = as.numeric(latent_heat_Flowering)) %>%
+  mutate(latent_heat_PreHarvest = as.numeric(latent_heat_PreHarvest)) %>%
+  mutate (latent_heat_Vegetation = as.numeric(latent_heat_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(latent_heat_Germination, latent_heat_Flowering, latent_heat_PreHarvest, latent_heat_Vegetation))
+  
+survey2 <- full_join(survey2, latent_heat_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Net longwave radiation, include=FALSE}
+
+# Create data frame with other weather data
+net_longwave_radiation <- read_dta("Data/Giovanni/net_longwave_radiation.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+   summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+net_longwave_radiation_transpose <- as.data.frame(t(as.matrix(net_longwave_radiation))) %>%
+  mutate(net_longwave_radiation_Flowering = V2, net_longwave_radiation_Germination = V3, net_longwave_radiation_PreHarvest = V4, net_longwave_radiation_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(net_longwave_radiation_Germination = as.numeric(net_longwave_radiation_Germination)) %>%
+  mutate(net_longwave_radiation_Flowering = as.numeric(net_longwave_radiation_Flowering)) %>%
+  mutate(net_longwave_radiation_PreHarvest = as.numeric(net_longwave_radiation_PreHarvest)) %>%
+  mutate (net_longwave_radiation_Vegetation = as.numeric(net_longwave_radiation_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(net_longwave_radiation_Germination, net_longwave_radiation_Flowering, net_longwave_radiation_PreHarvest, net_longwave_radiation_Vegetation))
+  
+survey2 <- full_join(survey2, net_longwave_radiation_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Net shortwave radiation,  include=FALSE}
+
+# Create data frame with other weather data
+net_shortwave_radiation <- read_dta("Data/Giovanni/net_shortwave_radiation.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+ summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+net_shortwave_radiation_transpose <- as.data.frame(t(as.matrix(net_shortwave_radiation))) %>%
+  mutate(net_shortwave_radiation_Flowering = V2, net_shortwave_radiation_Germination = V3, net_shortwave_radiation_PreHarvest = V4, net_shortwave_radiation_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(net_shortwave_radiation_Germination = as.numeric(net_shortwave_radiation_Germination)) %>%
+  mutate(net_shortwave_radiation_Flowering = as.numeric(net_shortwave_radiation_Flowering)) %>%
+  mutate(net_shortwave_radiation_PreHarvest = as.numeric(net_shortwave_radiation_PreHarvest)) %>%
+  mutate (net_shortwave_radiation_Vegetation = as.numeric(net_shortwave_radiation_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(net_shortwave_radiation_Germination, net_shortwave_radiation_Flowering, net_shortwave_radiation_PreHarvest, net_shortwave_radiation_Vegetation))
+  
+  
+survey2 <- full_join(survey2, net_shortwave_radiation_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Surface radiative temperature, include=FALSE}
+
+# Create data frame with other weather data
+surface_radiative_temperature <- read_dta("Data/Giovanni/surface_radiative_temperature.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+surface_radiative_temperature_transpose <- as.data.frame(t(as.matrix(surface_radiative_temperature))) %>%
+  mutate(surface_radiative_temperature_Flowering = V2, surface_radiative_temperature_Germination = V3, surface_radiative_temperature_PreHarvest = V4, surface_radiative_temperature_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(surface_radiative_temperature_Germination = as.numeric(surface_radiative_temperature_Germination)) %>%
+  mutate(surface_radiative_temperature_Flowering = as.numeric(surface_radiative_temperature_Flowering)) %>%
+  mutate(surface_radiative_temperature_PreHarvest = as.numeric(surface_radiative_temperature_PreHarvest)) %>%
+  mutate (surface_radiative_temperature_Vegetation = as.numeric(surface_radiative_temperature_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(surface_radiative_temperature_Germination, surface_radiative_temperature_Flowering, surface_radiative_temperature_PreHarvest, surface_radiative_temperature_Vegetation))
+  
+survey2 <- full_join(survey2, surface_radiative_temperature_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Surface runoff, include=FALSE}
+
+# Create data frame with other weather data
+surface_runoff <- read_dta("Data/Giovanni/surface_runoff.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+surface_runoff_transpose <- as.data.frame(t(as.matrix(surface_runoff))) %>%
+  mutate(surface_runoff_Flowering = V2, surface_runoff_Germination = V3, surface_runoff_PreHarvest = V4, surface_runoff_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(surface_runoff_Germination = as.numeric(surface_runoff_Germination)) %>%
+  mutate(surface_runoff_Flowering = as.numeric(surface_runoff_Flowering)) %>%
+  mutate(surface_runoff_PreHarvest = as.numeric(surface_runoff_PreHarvest)) %>%
+  mutate (surface_runoff_Vegetation = as.numeric(surface_runoff_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(surface_runoff_Germination, surface_runoff_Flowering, surface_runoff_PreHarvest, surface_runoff_Vegetation))
+  
+survey2 <- full_join(survey2, surface_runoff_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r Surface shortwave radiation, include=FALSE}
+
+# Create data frame with other weather data
+surface_shortwave_radiation <- read_dta("Data/Giovanni/surface_shortwave_radiation.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(mean, sd, max))
+
+
+# Traspose and rename to that we can merge
+surface_shortwave_radiation_transpose <- as.data.frame(t(as.matrix(surface_shortwave_radiation))) %>%
+  mutate(surface_shortwave_radiation_Flowering = V2, surface_shortwave_radiation_Germination = V3, surface_shortwave_radiation_PreHarvest = V4, surface_shortwave_radiation_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  mutate(stat = ifelse(id %in% (2:10), "mean", ifelse(id %in% (11:19), "sd", ifelse(id %in% (20:28), "max", "F"))))    %>%
+  mutate(pixel_code = ifelse(id == 2 | id == 11 | id == 20, "KE3482", ifelse(id == 3 | id == 12 | id == 21, "KE3486", ifelse(id == 4 | id == 13 | id == 22, "KE3556", ifelse(id == 5 | id == 14 | id == 23, "KE3557", ifelse(id == 6 | id == 15 | id == 24, "KE3558", ifelse(id == 7 | id == 16 | id == 25, "KE3630", ifelse(id == 8 | id == 17 | id == 26, "KE3631", ifelse(id==9 | id == 18 | id == 27, "KE3632", ifelse(id == 10 | id == 19 | id == 28, "KE3633", "F")))))))))) %>%
+    filter(id != 1) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  select(-id, -V1, -V2, -V3, -V4, -V5) %>%
+  mutate(surface_shortwave_radiation_Germination = as.numeric(surface_shortwave_radiation_Germination)) %>%
+  mutate(surface_shortwave_radiation_Flowering = as.numeric(surface_shortwave_radiation_Flowering)) %>%
+  mutate(surface_shortwave_radiation_PreHarvest = as.numeric(surface_shortwave_radiation_PreHarvest)) %>%
+  mutate (surface_shortwave_radiation_Vegetation = as.numeric(surface_shortwave_radiation_Vegetation))  %>% 
+  pivot_wider(names_from = stat,
+                    values_from = c(surface_shortwave_radiation_Germination, surface_shortwave_radiation_Flowering, surface_shortwave_radiation_PreHarvest, surface_shortwave_radiation_Vegetation))
+  
+survey2 <- full_join(survey2, surface_shortwave_radiation_transpose, by="pixel_code")
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+
+
+```
+
+```{r build and export datasets, include=FALSE}
+# Export datasets
+
+# Weather only 
+data_weather <- grid_farmers %>% 
+      # drop survey vars we won't use for our analysis
+  select(-Id :-harvest_maize_dry_kg_win) %>%
+  select(-revenue_harvest_win : -gps2longitude, -merge) 
+ # mutate(total_profit_win = total_profit_win + 20000)
+
+ # Take away the geometry component
+ st_geometry(data_weather) <- NULL
+  
+ # Export dataset
+ write_dta(data_weather,path ="Data/weather_profit_data.dta")
+
+ 
+ 
+# Weather and survey
+data_weather_survey <- grid_farmers %>%
+    # drop obs with missing locations
+#   drop_na(total_profit_win) %>%
+ #  filter(total_profit_win != 0) %>%
+    select(-total_profit_win, -total_revenue, -total_cost_inputs_win, -merge, -geometry, -gps2latitude, -gps2longitude, -harvest_maize_dry_kg_win, -Id:-revenue_harvest_win) 
+# %>%
+  # mutate(total_profit_win = total_profit_win + 20000)
+
+ # Take away the geometry component
+ st_geometry(data_weather_survey) <- NULL  
+
+ # Export dataset
+write_dta(data_weather_survey,path ="Data/weather_survey_data.dta")
+
+```
+
+
+
+Before running our predictive models, I set seed and split our data into a training and test dataset to conduct the analysis, partitioning 75% of the former and 25% to the latter. Our strata for the split is kg. of maize per hectare. We then build a recipe to: impute missing values, which is less than four for all variables; take the logarithm of our dependent variable, off-set by a factor of one, and normalize the scale of all our numeric variables. I then set seed again to partition the data into five-folds, to be able to set up a k-fold cross/validation procedure, using our dependent variable as a stratum. Setting up this control condition will allow us to validate our results across subsets in our data, preventing the model from overfitting the data. 
+
+I explored three supervised learning regression models to predict farmer's yields. I tested: k-nearest neighbors, regression trees, random forest, and support vector machines with Polynomial Kernel. Given our data's non-linear nature, it is unlikely that the linear regression model would provide a good fit. We also tried k-nearest neighbors, one of the simplest machine learning methods with few parameters to tune. The drawback is that it doesn't support automatic feature interaction, as the regression trees and random forest.  We think that a regression tree model would perform better, given that it is more robust to noise and outliers relative to the LM model. I suspect that the random forest model will achieve the best results given that it combines many decision trees into a single model. However, given that each of these four models entails different strengths and weaknesses, I test each on the training dataset to determine which model has the most robust predictive performance.
+
+
+
+## Results 
+
+Unfortunately, none of our four models predict changes in farmer's yields satisfactorily. If we follow the Root Mean Square Error (RMSE) approach, we will find that even though all models perform similarly, the KNN slightly smaller with an RMSE of 0.17. We can also see that KNN's has a somewhat higher r-squared of 0.047. These results are not as high as we would like to but are higher than the industry benchmark (currently around 0.02).  I followed many strategies to improve our model. I tried to expand the gris allowing trees to go deeper, but the the little correlation between variables didn't allow my code to run. I also tried different dependent variables (total yields, productivity per hectare, real profits), and log transformed the dependent and independent variables. 
+
+
+```{r import data, message=FALSE, warning=FALSE, include=FALSE}
+data_weather <- read_dta("Data/weather_profit_data.dta") 
+
+# Correlation matrix
+data_weather %>% 
+ select(maize_dry_kg_perha_win, actual_pay,   contains("mean") & (contains("Rain")| contains("soil" )| contains("evapotranspiration") )) %>%
+  GGally::ggcorr(., method = c("pairwise","pearson"), palette = "RdBu", hjust = .85, size = 3,
+       layout.exp=2) +
+  scale_fill_viridis_c(option="magma")
+
+
+data_weather <- data_weather %>%
+ select(-actual_pay) %>%
+     drop_na(maize_dry_kg_perha_win)
+
+skimr::skim(data_weather)
+  
+```
+
+```{r split data, include=FALSE}
+
+set.seed(1456) # We set a seed so we can reproduce the random split
+splits <- initial_split(data_weather,prop = .75, strata = maize_dry_kg_perha_win)
+train_data = training(splits) # Use 75% of the data as training data 
+test_data = testing(splits) # holdout 25% as test data 
+
+dim(train_data)
+
+```
+
+```{r recipe, include=FALSE}
+rcp <- 
+  recipe(maize_dry_kg_perha_win ~  .,train_data) %>% 
+    step_meanimpute(all_numeric()) %>%  # Impute all missings in numerics with means
+  step_modeimpute(all_nominal()) %>% # Impute all missings in factos with the mode
+  step_dummy(all_nominal()) %>% # Convert all factor variables into dummies which is better for the model
+  step_log(maize_dry_kg_perha_win, offset = 1) %>% # Log the skewed  variables
+  step_range(all_numeric()) %>%  # Normalize scale
+  prep()
+
+
+# Apply the recipe to the training and test data
+train_data2 <- bake(rcp,train_data)
+test_data2 <- bake(rcp,test_data) 
+
+head(train_data2)
+
+```
+
+```{r create folds set cross validation, include=FALSE}
+# Set a seed for replication purposes 
+set.seed(1988) 
+
+# Partition the data into 5 equal folds
+folds <- createFolds(train_data2$maize_dry_kg_perha_win, k = 5) 
+sapply(folds,length)
+
+# Set up valiation conditions
+control_conditions <- 
+  trainControl(method='cv', # K-fold cross validation
+               index = folds # The indices for our folds (so they are always the same)
+  )
+
+```
+
+```{r knn, include=FALSE}
+
+# Different values of the tuning parameter that I want to try.
+knn_tune = expand.grid(k = c(1,3,10,50))
+
+mod_knn <-
+  train(maize_dry_kg_perha_win ~ .,           # Equation (outcome and everything else)
+        data=train_data2,  # Training data 
+        method = "knn",    # K-Nearest Neighbors Algorithm
+        metric = "RMSE",   # mean squared error
+        trControl = control_conditions, # Cross validation conditions
+        tuneGrid = knn_tune # Vary the tuning parameter K 
+  )
+
+```
+
+```{r regression tree, include=FALSE}
+#tune_cart <- expand.grid(cp = c(0.0000050281)) # Complexity Parameter (how "deep" our trees should grow)
+mod_cart <-
+   train(maize_dry_kg_perha_win ~ .,            # Equation (outcome and everything else)
+        data=train_data2,    # Training data 
+        method = "rpart",    # Regression tree
+        metric = "RMSE",     # mean squared error
+        #eGrid = tune_cart, # Tuning parameters
+        trControl = control_conditions # Cross validation conditions
+  )
+
+mod_cart
+
+```
+
+```{r random forest, include=FALSE}
+
+mod_rf <-
+  train(maize_dry_kg_perha_win ~ ., # Equation (outcome and everything else)
+        data=train_data2, # Training data 
+        method = "ranger", # random forest (ranger is much faster than rf)
+        metric = "RMSE",     # mean squared error
+        trControl = control_conditions
+  )
+
+mod_rf
+
+```
+
+```{r model comparison, fig.cap="Machine learning model comparisons", fig.show="hold", out.width="50%", echo=FALSE}
+# Organize all model imputs as a list.
+mod_list <-
+  list(
+    cart = mod_cart,
+    rf = mod_rf, 
+    # svm_poly = mod_svm_poly,
+    knn = mod_knn
+  )
+
+# Resamples allows us to compare model output
+resamples(mod_list)
+
+
+# Graphs
+dotplot(resamples(mod_list),metric = "RMSE")
+dotplot(resamples(mod_list),metric = "Rsquared")
+
+```
+
+
+Regarding variable importance, different models selected different variables. For example, the KNN didn't choose any variable over the other, whereas the regression tree assigned 0.065 importance to humidity in the germination period. Lastly, we can see how the model assigns importance to some variables for the random forest model but their confidence interval for most crosses cero. However, variables la the net shortwave radiation maximun in the flowering period and surface runoff vegetation mean matter. 
+
+
+```{r rf vars of importance, fig.cap=": Random Forest: Top 10 Variables of Importance", paged.print=FALSE, fig.align='center', echo=FALSE}
+vi_plot<- 
+  vip(mod_rf, # Machine learning model
+      train = train_data2, # Training data 
+      method="permute", # permuted importance
+      nsim = 10, # number of times to impute
+      geom = "boxplot", # Type of plot 
+      target = "maize_dry_kg_perha_win", # outcome
+      metric = "rsquared",
+      pred_wrapper = predict, 
+      mapping = aes_string(fill = "Variable"), 
+      aesthetics = list(color = "grey35")) +
+  scale_fill_viridis_d(option="magma")
+
+# Plot VIP
+vi_plot
+
+```
+
+
+
+
+## Discussion and conclusion
+
+I based the success of this project on two broader objectives. First, to translate purely statistical analysis to spatial data analysis. In this matter, we could visualize the high concentration of farmers in a specific area of Siaya county. Moreover, we observe the spatial aggregation of farmers' yields, payouts, and weather indicators more clearly.  On the other hand, we wanted to see if throwing extra weather data into a machine learning exercise would improve our farmer yield predictions to protect them better against weather hazards. Even though we improved the industry's benchmark, we could not predict a high percentage of farmer yield variation in this particular setting. 
+
+There are a variety of reasons that explain our not satisfactory results. Reduced spatial variation (high concentration of farmers) and time variation (only one season) represent enormous challenges for this type of analysis. Even though we spotted this concern at the early stages of the study, we decided to move forward, given that this assignment is embedded in a wider project, including a Randomized Control Trial (RCT) that included only the selected farmers. Another challenge is the nonrandom measurement error in self-reported yield statistics, which can threaten external validity concerns. Potential biases and measurement error are well-documented in the literature, and we think satellite crop images can account for this fact. 
+
+I see many opportunities for improvement. I want to extend this analysis to the historical (20 to 80-year) weather and yield data to develop a weather index-based insurance product in future endeavors.  Moreover, it could be useful to build and test our index using non-parametric and quantile regression to better protect those at the lower end of the distribution. 
+
+\pagebreak
+
+## Apendices 
+
+a. Variable description: 
+
+Variable | Description 
+--------------------|-------------------------
+Maize productivity	| Self-reported kg. of maize per hectare   
+Rainfall	| Precipitation measured in milliliters 	 
+  Humidity | Water vapor contained in the atmosphere	 
+  Evapotranspiration |  The sum of evaporation and plant transpiration	 
+  soil heat | The rate at which heat is transferred through 	 
+  Soil moisture | The depth-averaged amount of water in a soil layer	 
+  Surface air temperature | The average temperature of the air	 
+  Surface pressure	 | The atmospheric pressure at the Earth surface	 
+  Surface wind speed | Air movement speed relative to a fixed point 	 
+  Surface heat | The average temperature of the Earth's surface	 
+  Latent heat | The rate at which heat is transferred through a given surface.	 
+  Net long/shortwave radiation	| Difference between incoming and outgoing radiation  	 
+  Surface radiative temperature | Average temperature of the Earth's surface	 
+  Surface runoff | Water, from rain, snowmelt, etc. which flows over the land surface. 
+
+\pagebreak
+
+
+## References
+
+Brown ME, Kshirsagar V. Weather and international price shocks on food prices in the developing world. Global Environ Change. 2015;35:31–40.
+
+Gaigné, C., Christopher B. Barrett and A. Mude. “Index Insurance Quality and Basis Risk: Evidence from Northern Kenya.” Development Economics: Regional & Country Studies eJournal (2016): n. pag.
+
+Norton MT, Turvey C, Osgood D. Quantifying spatial basis risk for weather index insurance. J Risk Finance. 2013;14(1):20–34.
+
+Rishi, Raithatha and Jan, Priebe (2020). Agricultural insurance
+for smallholder farmers
+Digital innovations for scale. GSMA AgriTech Programme.
+
+Wheeler T, von Braun J. Climate change impacts on global food security. Science. 2013;341(6145):508–13.
+

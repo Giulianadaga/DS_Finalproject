@@ -1,0 +1,345 @@
+Predicting farmer's profits in rural Kenya
+========================================================
+author: Giuliana Daga
+date: 12/02/2020
+autosize: true
+Problem statement and background
+========================================================
+
+- Client: The product is piloted by Agriculture and Climate Risk Enterprise (ACRE), working in Kenya since 2009.
+- Index-based insurance insurance links payouts not to actual crop losses but to exogenous events (in their case, rains).
+- However, basis risk is an issue, given that the correlation between payouts (calculated over rain amounts) and actual yields is imperfect.
+
+
+Our goal is twofold: transform a previous statistical analysis into a geospatial one with good visualizations: and include more weather variables to improve ACRE's model and protect better farmers against weather hazards.
+
+```{r include=FALSE}
+require(readr)
+require(tidyverse)
+require(haven)
+require(tidyverse)
+require(lubridate)
+require(caret) # for machine learning
+require(recipes) # For preprocessing your data
+require(rsample) # for train test splits
+require(rattle) # For nice tree plots
+require(yardstick) # for performance metrics
+require(janitor) # for performance metrics
+require(kernlab) # for radial boundary
+require(vip) # For variable importance
+require(pdp) # pdp and ice plots
+require(rpart) # Let's use the model package directly (rather than in caret)
+require(ggthemes)
+require(sf)
+require(nngeo)
+require(patchwork)
+require(RColorBrewer)
+```
+
+Where are our farmers?
+========================================================
+
+```{r figures-side1, echo=FALSE, fig.show="hold", out.width="50%"}
+survey <- read_dta("Data/midline_subset.dta") %>%
+      # Clean variable names
+    janitor::clean_names()  %>%
+    # drop obs with missing locations
+   drop_na(gps1longitude)
+
+  # Let's look at the locations
+plot <- survey %>%
+    ggplot(aes(x=gps1longitude ,y=gps1latitude)) +
+    geom_point(color="darkred",alpha=.1)
+
+# Set lat and long as geospatial data
+  survey <- survey %>%
+  st_as_sf(coords=c("gps1longitude","gps1latitude"))
+  
+  # Map of Kenia
+kenya_shape <- read_sf("Data/county_shape/County.shp")
+# Farmers grid and centroids data
+farmer_grid <- read_sf("Data/farmers_grid/farmers_grid.shp") %>%
+  mutate(Id = row_number())
+farmer_centroid <- read_sf("Data/farmers_grid/farmers_grid_label.shp") %>%
+mutate(Id = row_number())
+# Overlay the two spatial features
+st_crs(kenya_shape) <- st_crs(farmer_grid)
+# Keep only the counties where the farmers are
+ken_grid <- st_filter(kenya_shape, farmer_grid)
+# Plot map of Kenya with grids
+ggplot() +
+  geom_sf(data = kenya_shape, fill = "gray") +
+  geom_sf(data = ken_grid, fill = "darkgreen", alpha=.5, inherit.aes = F) +
+  theme_map()
+
+print(plot)
+```
+
+How is ACRE aggregating farmers to calculate their payouts?
+========================================================
+```{r echo = FALSE, warnings=FALSE, messages=FALSE, results="hide", figures-side, echo=FALSE, fig.show="hold", out.width="50%"}
+# Generate the plot of the grid data and their centroids
+ggplot() +
+  geom_sf(data = farmer_grid, fill = "azure3") +
+  geom_sf(data = farmer_centroid, alpha=.5, inherit.aes = F) +
+    coord_sf(xlim = c(34, 34.5), ylim = c(0.00, 0.4), expand = FALSE)
+all_graph <- ggplot() +
+  geom_sf(data = ken_grid,fill="lightgrey") +
+  geom_sf(data = farmer_grid,alpha=.5,inherit.aes = F) +
+  geom_sf(data = survey, alpha=.01,inherit.aes = F, color="darkred")
+  theme_map()
+print(all_graph)
+
+
+```
+
+What are they using to calculate payouts?
+========================================================
+
+Currently, they are only using IRI/LDEO Climate Data Library daily rainfall data. They aggregate data into four periods: germination, flowering, vegetation and pre-harvest.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Create data frame with rainfall data
+rainfall <- read_csv("Data/rainfall_1.csv")
+for (i in 2:9){
+  tmp_data <- read_csv(paste0("Data/rainfall_",i,".csv"))
+  rainfall<- left_join(rainfall, tmp_data, by="Time")
+}
+# Convert Time into a date variable
+rainfall <- rainfall %>%
+  mutate(Time = dmy(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F")))))
+#skimr::skim(rainfall)
+rainfall_periods <- rainfall %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(sum))
+rainfall_transpose <- as.data.frame(t(as.matrix(rainfall_periods)))
+rainfall_transpose <- rainfall_transpose %>%
+  mutate(Rain_Flowering = V2, Rain_Germination = V3, Rain_PreHarvest = V4, Rain_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  filter(id != 1) %>%
+  mutate(pixel_code = ifelse(id == 2, "KE3482", ifelse(id == 3, "KE3556", ifelse(id == 4, "KE3630", ifelse(id == 5, "KE3557", ifelse(id == 6, "KE3631", ifelse(id == 7, "KE3632", ifelse(id == 8, "KE3558", ifelse(id==9, "KE3633", ifelse(id == 10, "KE3486", "F")))))))))) %>%
+  select(pixel_code, Rain_Germination, Rain_Flowering, Rain_Vegetation, Rain_PreHarvest)
+rainfall_transpose <- rainfall_transpose %>%
+  mutate(Rain_Germination = as.numeric(Rain_Germination)) %>%
+  mutate(Rain_Flowering = as.numeric(Rain_Flowering)) %>%
+  mutate(Rain_PreHarvest = as.numeric(Rain_PreHarvest)) %>%
+  mutate (Rain_Vegetation = as.numeric(Rain_Vegetation))
+# Join survey and rainfal data
+survey2 <- full_join(survey, rainfall_transpose, by="pixel_code")
+# Join farmers grid and survey data
+grid_farmers <- st_join(farmer_grid, survey2)
+```
+
+
+
+
+```{r echo=FALSE, fig.align="center", fig.height=5, fig.width=7}
+# Germination
+choro_rain_germ <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Rain_Germination)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Germination") +
+  theme_map() +
+  theme(legend.position = "bottom")
+# Flowering
+choro_rain_flow <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Rain_Flowering)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Flowering") +
+  theme_map() +
+  theme(legend.position = "bottom")
+# Vegetation
+choro_rain_veg <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Rain_Vegetation)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Vegetation") +
+  theme_map() +
+  theme(legend.position = "bottom")
+# Pre-Harvest
+choro_rain_harv <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Rain_PreHarvest)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Pre-Harvest") +
+  theme_map() +
+  theme(legend.position = "bottom")
+choro_rain_germ + choro_rain_flow + choro_rain_veg + choro_rain_harv +
+plot_annotation(  title = "Rainfall average by pixelid across periods",
+    theme = theme(plot.title = element_text(size = 14))
+  )
+```
+
+How can we improve their model?
+========================================================
+Giovanni - NASA Data Collection: humidity, soil moisture, surface air temperature, pressure, wind speed, evapotranspiration, etc.
+
+```{r echo=FALSE, fig.align="center", fig.height=5, fig.width=7}
+# Create data frame with other weather data
+humidity <- read_dta("Data/Giovanni/humidity.dta") %>%
+mutate(Time = ymd(Time)) %>%
+  filter(Time > ymd(20180904) & Time < ymd(20190118)) %>%
+ mutate(Periods =ifelse(Time %in% ymd(20180904:20180924), "Germination",
+ifelse(Time %in% ymd(20180925:20181028), "Vegetation",  ifelse(Time %in% ymd(20181023:20181202), "Flowering", ifelse(Time %in% ymd(20181122:20190101), "Pre-harvest", "F"))))) %>%
+  select(-Time) %>%
+  group_by(Periods) %>%
+  summarise_all(funs(sum))
+# Traspose and rename to that we can merge
+humidity_transpose <- as.data.frame(t(as.matrix(humidity))) %>%
+  mutate(Humidity_Flowering = V2, Humidity_Germination = V3, Humidity_PreHarvest = V4, Humidity_Vegetation = V5) %>%
+  mutate(id = row_number()) %>%
+  filter(id != 1) %>%
+  mutate(pixel_code = ifelse(id == 2, "KE3482", ifelse(id == 3, "KE3486", ifelse(id == 4, "KE3556", ifelse(id == 5, "KE3557", ifelse(id == 6, "KE3558", ifelse(id == 7, "KE3630", ifelse(id == 8, "KE3631", ifelse(id==9, "KE3632", ifelse(id == 10, "KE3633", "F")))))))))) %>%
+  select(pixel_code, Humidity_Germination, Humidity_Flowering, Humidity_Vegetation, Humidity_PreHarvest) %>%
+  filter(pixel_code !="KE3486", pixel_code!= "KE3630") %>%
+  mutate(Humidity_Germination = as.numeric(Humidity_Germination)) %>%
+  mutate(Humidity_Flowering = as.numeric(Humidity_Flowering)) %>%
+  mutate(Humidity_PreHarvest = as.numeric(Humidity_PreHarvest)) %>%
+  mutate (Humidity_Vegetation = as.numeric(Humidity_Vegetation))
+survey2 <- full_join(survey2, humidity_transpose, by="pixel_code")
+# Join
+grid_farmers <- st_join(farmer_grid, survey2)
+# Germination
+choro_hum_germ <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Humidity_Germination)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Germination") +
+  theme_map() +
+  theme(legend.position = "bottom")
+# Flowering
+choro_hum_flow <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Humidity_Flowering)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Flowering") +
+  theme_map() +
+  theme(legend.position = "bottom")
+# Vegetation
+choro_hum_veg <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Humidity_Vegetation)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Vegetation") +
+  theme_map() +
+  theme(legend.position = "bottom")
+# Pre-Harvest
+choro_hum_harv <-
+  grid_farmers %>%
+  ggplot() +
+  geom_sf(aes(fill=Humidity_PreHarvest)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Pre-Harvest") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+choro_hum_germ + choro_hum_flow + choro_hum_veg + choro_hum_harv +
+plot_annotation(    title = "Avg. Humidity by pixelid across periods",
+    theme = theme(plot.title = element_text(size = 14))
+  )
+```
+
+
+
+Outcome: Total profits in Short rains season 2018
+========================================================
+
+We have extensive data for each farmers: like investment on inputs, seeds, acreage, household characteristics, etc.
+
+```{r echo=FALSE, fig.align="center", fig.height=5, fig.width=7}
+
+# Overlay the two spatial feature
+st_crs(survey) <- st_crs(farmer_grid)
+
+# Join
+grid_farmers <- st_join(farmer_grid, survey)
+
+# Make profits positive
+
+# Kg. Maize per acre
+choro_productivity <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=maize_dry_kg_peracre_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Kg. Maize per acre") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Total profits
+choro_total_profits <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=total_profit_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total profits") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Total profits
+choro_total_revenues <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=total_revenue)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total revenue") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Investment in inputs
+choro_invest_inputs <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=total_cost_inputs_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total investment in inputs") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+# Investment in seeds
+choro_invest_seeds <- 
+  grid_farmers %>% 
+  ggplot() +
+  geom_sf(aes(fill=total_cost_allseeds_win)) +
+  scale_fill_viridis_c(option="magma") + # Need the viridis package installed
+  labs(fill="Total investment in seeds") +
+  theme_map() +
+  theme(legend.position = "bottom")
+
+choro_total_profits + choro_invest_inputs + choro_invest_seeds + plot_annotation(title = "Total profits and investments aggregated at the pixel level",
+    theme = theme(plot.title = element_text(size = 14))
+  )
+
+```
+
+Methods/ Approaches considered
+========================================================
+We will apply supervised learning methods using farmer's profits as an output and weather variables (divided by our 4 periods) as our input. 
+
+We will follow the steps as learned in class: prepare and bake recipe, split data into training and test, and set cross/validation methods for all our statistical learning algorithms.
+We will estimate:
+- Regression trees
+- Random Forest
+- Support Vector Machines (svmPoly)
+Preliminary results and conclusions
+========================================================
+So far, I overcame fundamental challenges: 
+- building the fishnet (or grid) to fit pixel ids form the points provided by ACRE (using Arcmap)
+- gather geospatial weather data for the right locations (Northern Siaya County) and time (short seasons 2018)
+- manipulating data to be able to join them all together in one data frame.
+
+
+Having the required data built, I will be able to follow steps for analysis. 

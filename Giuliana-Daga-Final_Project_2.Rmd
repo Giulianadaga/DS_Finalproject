@@ -1,0 +1,243 @@
+---
+title: "Giuliana-Daga-Final_Project_2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r import data, include=FALSE}
+data_weather <- read_dta("Data/weather_profit_data.dta")
+```
+
+
+
+1. Split the data into a training and test dataset partitioning 75% of the data into the training data, and holding out 25% of the data as a test set.
+
+```{r}
+
+set.seed(14786) # We set a seed so we can reproduce the random split
+
+splits <- initial_split(data_weather,prop = .75, strata = total_profit_win)
+train_data = training(splits) # Use 75% of the data as training data 
+test_data = testing(splits) # holdout 25% as test data 
+
+dim(train_data)
+
+```
+
+
+2. Pre-process your data and generate an object with your cross-validation settings.
+
+
+a. Examine data 
+```{r}
+skimr::skim(train_data)
+
+```
+
+b. Make graphs
+
+```{r}
+train_data %>% 
+  
+  # only select the numeric variables
+  select(harvest_maize_dry_kg_win, total_profit_win ) %>% 
+  
+  # Pivot to longer data format (for faceting)
+  pivot_longer(cols = everything()) %>% 
+  
+  # Plot histograms for each variable
+  ggplot(aes(value)) +
+  
+  geom_histogram() +
+  
+  facet_wrap(~name,scales="free",ncol=3)
+
+```
+
+
+<br>
+
+3. Pre-process the data using the recipes package:
+
+
+```{r}
+rcp <- 
+  recipe(total_profit_win ~ . ,train_data) %>% 
+ step_meanimpute(all_numeric()) %>%  # Impute all missings in numerics with means
+  step_log(total_profit_win, harvest_maize_dry_kg_win, offset = 1) %>%
+  step_range(all_numeric()) %>%  # Normalize scale
+  prep()
+
+
+# Apply the recipe to the training and test data
+train_data2 <- bake(rcp,train_data)
+test_data2 <- bake(rcp,test_data) 
+
+head(train_data2)
+
+```
+
+4. Use K-fold cross-validation with 5 folds. Make sure to partition the data at the start (using createFolds()) so you can compare model performance.
+
+
+```{r}
+# Set a seed for replication purposes 
+set.seed(1988) 
+
+# Partition the data into 5 equal folds
+folds <- createFolds(train_data2$total_profit_win, k = 5) 
+sapply(folds,length)
+
+```
+
+5. Set up control conditions: 
+
+```{r}
+# Set up valiation conditions
+control_conditions <- 
+  trainControl(method='cv', # K-fold cross validation
+               index = folds # The indices for our folds (so they are always the same)
+  )
+
+
+```
+
+
+6. Start running out models:
+
+1) Regression trees: 
+
+
+```{r}
+mod_cart <-
+   train(total_profit_win ~ .,            # Equation (outcome and everything else)
+        data=train_data2,    # Training data 
+        method = "rpart",    # Regression tree
+        metric = "RMSE",     # mean squared error
+        trControl = control_conditions # Cross validation conditions
+  )
+
+mod_cart
+
+```
+
+
+2) Random forest:
+
+```{r}
+
+mod_rf <-
+  train(total_profit_win ~ ., # Equation (outcome and everything else)
+        data=train_data2, # Training data 
+        method = "ranger", # random forest (ranger is much faster than rf)
+        metric = "RMSE",     # mean squared error
+        trControl = control_conditions
+  )
+
+mod_rf
+
+```
+
+
+
+```{r}
+# Organize all model imputs as a list.
+mod_list <-
+  list(
+    cart = mod_cart,
+    rf = mod_rf 
+  )
+
+# Resamples allows us to compare model output
+resamples(mod_list)
+
+
+# Graphs
+dotplot(resamples(mod_list),metric = "RMSE")
+dotplot(resamples(mod_list),metric = "Rsquared")
+
+```
+
+
+
+```{r}
+
+# Which model performed better?
+pred <- predict(mod_rf,newdata = test_data2)
+mse = sum((test_data2$total_profit_win-pred)^2)/nrow(test_data2)
+rmse_score = sqrt(mse)
+rmse_score
+
+# Generate a prediction on our test data. 
+pred <- predict(mod_rf,newdata = test_data2)
+
+
+# Organize as a data frame
+performance = tibble(truth=test_data2$total_profit_win,estimate = pred)
+
+# Calculate performance metrics
+bind_rows(
+  performance %>% rmse(truth,estimate), # Root Mean Squared Error
+  performance %>% rsq(truth,estimate) # R Squared
+)
+
+```
+
+
+## Variable importance: 
+
+```{r}
+vi_plot<- 
+  vip(mod_rf, # Machine learning model
+      train = train_data2, # Training data 
+      method="permute", # permuted importance
+      nsim = 10, # number of times to impute
+      geom = "boxplot", # Type of plot 
+      target = "total_profit_win", # outcome
+      metric = "rsquared",
+      pred_wrapper = predict)
+
+# Plot VIP
+vi_plot
+```
+
+
+## Surrogate Model
+
+```{r}
+train_data3 <- 
+  train_data2 %>% 
+  mutate(
+    # Probability predictions from the random forest model
+    profits_pred = predict(mod_rf,type = "raw")
+  )  
+
+
+surrogate_tree <-
+  
+  # Decision tree model (directly us the model rather than use the implementation in caret)
+  rpart::rpart(
+    # Main selected model. The outcome is now the predicted probabilities from
+    # the RF model
+    profits_pred ~  Rain_Vegetation + Rain_PreHarvest + Rain_Germination + Rain_Flowering + Humidity_Vegetation + Humidity_PreHarvest + Humidity_Germination + Humidity_Flowering + evapotranspiration_Germination,
+    
+    # Data is being passed by the pipe
+    data = train_data3,
+    
+    # Note that we can control the depth of the tree
+    # a deeper tree increase fit but reduces interpretability
+    control = rpart::rpart.control(maxdepth = 6)
+  )
+
+rattle::fancyRpartPlot(surrogate_tree,sub="",type=1)
+```
+```{r}
+tibble(truth = train_data3$profits_pred,
+       estimate = predict(surrogate_tree)) %>% 
+  rsq(truth,estimate)
+```
+
+
